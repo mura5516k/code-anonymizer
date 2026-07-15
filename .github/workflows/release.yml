@@ -1,0 +1,29 @@
+name: Release
+
+# vで始まるタグ(例: v1.0.1)をpushすると、Windows上でexeインストーラをビルドして
+# GitHub Releaseに自動添付する
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build-installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Run tests
+        run: .\gradlew.bat test
+      - name: Build exe installer (WiX is preinstalled on windows runners)
+        run: .\gradlew.bat jpackage
+      - name: Create GitHub Release with installer
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ui/build/jpackage/*.exe
+          generate_release_notes: true
