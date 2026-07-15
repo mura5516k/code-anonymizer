@@ -1,0 +1,153 @@
+import org.gradle.internal.os.OperatingSystem
+import org.gradle.jvm.toolchain.JavaLanguageVersion
+import org.gradle.jvm.toolchain.JavaToolchainService
+
+plugins {
+    id 'application'
+    id 'com.gradleup.shadow' version '8.3.5'
+}
+
+def toolchainService = project.extensions.getByType(JavaToolchainService)
+def jdk17Home = toolchainService.launcherFor {
+    languageVersion = JavaLanguageVersion.of(17)
+}.map { it.metadata.installationPath.asFile.absolutePath }
+
+dependencies {
+    implementation project(':core')
+}
+
+application {
+    mainClass = 'com.mura.codeanonymizer.ui.MainApp'
+}
+
+shadowJar {
+    archiveBaseName = 'code-anonymizer'
+    archiveClassifier = 'all'
+    mergeServiceFiles()
+    // ライセンスとサードパーティ帰属表示を配布物(jar→exe)に同梱する
+    from(rootProject.file('THIRD-PARTY-NOTICES.md')) {
+        into 'META-INF'
+    }
+    from(rootProject.file('LICENSE')) {
+        into 'META-INF'
+        rename { 'LICENSE-code-anonymizer' }
+    }
+}
+
+def jpackageOutputDir = layout.buildDirectory.dir('jpackage')
+def jlinkRuntimeDir = layout.buildDirectory.dir('runtime')
+
+// WiXインストーラはPATHへの追加を行わず、WIX環境変数(インストールルート)のみを設定するため、
+// candle.exe/light.exeの場所をここで解決してjpackage実行時だけPATHに追加する。
+def findWixBinDir = {
+    def wixRoot = System.getenv('WIX')
+    if (wixRoot) {
+        def candidate = new File(wixRoot, 'bin')
+        if (new File(candidate, 'candle.exe').exists()) {
+            return candidate.absolutePath
+        }
+    }
+    def searchRoots = [
+        System.getenv('ProgramFiles(x86)'),
+        System.getenv('ProgramFiles')
+    ].findAll { it }.collect { new File(it) }
+
+    for (root in searchRoots) {
+        if (!root.exists()) {
+            continue
+        }
+        def match = root.listFiles()
+                ?.findAll { it.isDirectory() && it.name.toLowerCase().startsWith('wix toolset') }
+                ?.sort { it.name }
+                ?.reverse()
+                ?.find { new File(it, 'bin/candle.exe').exists() }
+        if (match) {
+            return new File(match, 'bin').absolutePath
+        }
+    }
+    return null
+}
+
+tasks.register('jlinkRuntime', Exec) {
+    group = 'distribution'
+    description = 'jlinkで同梱用の最小Javaランタイムを作成する(Windows専用)'
+    dependsOn tasks.named('shadowJar')
+
+    doFirst {
+        if (!OperatingSystem.current().isWindows()) {
+            throw new GradleException(
+                'jlinkRuntime タスクは Windows 上でのみ実行できます。' +
+                'Windows実機(JDK 17+, jlink同梱)でビルドしてください。'
+            )
+        }
+        def outDir = jlinkRuntimeDir.get().asFile
+        if (outDir.exists()) {
+            outDir.deleteDir()
+        }
+    }
+
+    executable = "${jdk17Home.get()}/bin/jlink"
+    args = [
+        '--add-modules', 'java.base,java.desktop,java.logging,java.xml,java.naming,java.sql,jdk.unsupported',
+        '--output', jlinkRuntimeDir.get().asFile.absolutePath,
+        '--strip-debug',
+        '--no-header-files',
+        '--no-man-pages',
+        '--compress=2'
+    ]
+}
+
+tasks.register('jpackage', Exec) {
+    group = 'distribution'
+    description = 'jpackageでWindows用exeインストーラを生成する(Windows専用)'
+    dependsOn tasks.named('jlinkRuntime')
+
+    doFirst {
+        if (!OperatingSystem.current().isWindows()) {
+            throw new GradleException(
+                'jpackage タスクは Windows 上でのみ実行できます。' +
+                'WiX Toolset 3.x がインストールされた Windows 実機でビルドしてください。'
+            )
+        }
+        // jpackageは既存の出力ファイルを上書きできないため、事前にクリアする
+        def outDir = jpackageOutputDir.get().asFile
+        if (outDir.exists()) {
+            outDir.eachFile { f ->
+                f.setWritable(true)
+                if (!f.delete()) {
+                    throw new GradleException(
+                        "前回の出力ファイルを削除できません: ${f}\n" +
+                        'インストーラが実行中でないか、エクスプローラー等で開かれていないか確認してください。'
+                    )
+                }
+            }
+        }
+        outDir.mkdirs()
+
+        def wixBinDir = findWixBinDir()
+        if (wixBinDir == null) {
+            throw new GradleException(
+                'WiX Toolset (candle.exe / light.exe) が見つかりませんでした。' +
+                'WIX環境変数、または "C:\\Program Files (x86)\\WiX Toolset vX.X\\bin" にインストールされているか確認してください。' +
+                '(WiXインストーラはPATHへは追加されないため、インストール自体は完了していても発生します)'
+            )
+        }
+        environment 'PATH', "${wixBinDir};${System.getenv('PATH')}"
+    }
+
+    executable = "${jdk17Home.get()}/bin/jpackage"
+    args = [
+        '--type', 'exe',
+        '--name', 'CodeAnonymizer',
+        '--app-version', project.version.toString(),
+        '--input', tasks.named('shadowJar').get().destinationDirectory.get().asFile.absolutePath,
+        '--main-jar', tasks.named('shadowJar').get().archiveFileName.get(),
+        '--main-class', 'com.mura.codeanonymizer.ui.MainApp',
+        '--runtime-image', jlinkRuntimeDir.get().asFile.absolutePath,
+        '--dest', jpackageOutputDir.get().asFile.absolutePath,
+        '--license-file', rootProject.file('LICENSE').absolutePath,
+        '--win-menu',
+        '--win-shortcut',
+        '--win-dir-chooser'
+    ]
+}

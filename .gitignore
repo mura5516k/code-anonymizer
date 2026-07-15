@@ -1,0 +1,21 @@
+# ビルド生成物
+build/
+.gradle/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+.settings/
+.classpath
+.project
+bin/
+
+# 匿名化マッピング(元の名前を含む機密ファイル。絶対にコミットしない)
+mapping.json
+*.mapping.json
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
