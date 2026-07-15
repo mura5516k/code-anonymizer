@@ -6,7 +6,6 @@ import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
-import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTable;
@@ -72,7 +71,7 @@ public class MappingTab extends JPanel {
             MappingStore newStore = new MappingStore(selected);
             mainFrame.setStore(newStore);
         } catch (RuntimeException ex) {
-            JOptionPane.showMessageDialog(this, ex.getMessage(), "エラー", JOptionPane.ERROR_MESSAGE);
+            ErrorDialogs.show(this, "エラー", ex);
         }
     }
 
@@ -89,7 +88,7 @@ public class MappingTab extends JPanel {
             MappingStore newStore = MappingStore.createNew(selected);
             mainFrame.setStore(newStore);
         } catch (RuntimeException ex) {
-            JOptionPane.showMessageDialog(this, ex.getMessage(), "エラー", JOptionPane.ERROR_MESSAGE);
+            ErrorDialogs.show(this, "エラー", ex);
         }
     }
 }

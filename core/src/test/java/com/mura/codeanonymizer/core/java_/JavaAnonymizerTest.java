@@ -195,6 +195,67 @@ class JavaAnonymizerTest {
                 "同一パッケージ参照とみられる未解決型は警告される: " + result.getWarnings());
     }
 
+    @Test
+    void parseFailureThrowsConciseSingleScreenMessage(@TempDir Path tempDir) {
+        MappingStore store = new MappingStore(tempDir.resolve("mapping.json"));
+        JavaAnonymizer anonymizer = new JavaAnonymizer(store);
+
+        String xml = "<mapper namespace=\"com.example.OrderMapper\"><select id=\"find\"/></mapper>";
+
+        JavaAnonymizeException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                JavaAnonymizeException.class,
+                () -> anonymizer.anonymize(xml, new AnonymizeOptions(true, false)));
+
+        assertTrue(ex.getMessage().length() < 500, "メッセージは短く保つ: " + ex.getMessage().length() + "文字");
+        assertTrue(!ex.getMessage().contains("Problem stacktrace"), "スタックトレースを含まない");
+        assertTrue(ex.getMessage().contains("XML"), "非対応形式のヒントを含む");
+    }
+
+    @Test
+    void bareMethodFragmentIsAnonymizedWithoutWrapperLeaking(@TempDir Path tempDir) {
+        MappingStore store = new MappingStore(tempDir.resolve("mapping.json"));
+        JavaAnonymizer anonymizer = new JavaAnonymizer(store);
+
+        String fragment = """
+                @Test
+                public void readTest() throws Exception {
+                    //- クラスローダから test.xml のファイル位置を取得
+                    String fileName = XXXX.class.getClassLoader().getResource("test.xml").getPath();
+
+                    TestBean bean = readXml(fileName);
+                    assertNotNull(bean);
+                    assertEquals("test.xml", bean.getOriginName());
+                }
+                """;
+
+        AnonymizeResult result = anonymizer.anonymize(fragment, new AnonymizeOptions(true, false));
+        String output = result.getOutput();
+
+        assertTrue(!output.contains("readTest"), "メソッド名はリネームされる");
+        assertTrue(!output.contains("fileName"), "ローカル変数はリネームされる");
+        assertTrue(!output.contains("CodeAnonymizerFragmentWrapper"), "合成ラッパーが出力に漏れない");
+        assertTrue(output.contains("@Test"), "未宣言のアノテーションは変更されない");
+        assertTrue(!output.contains("クラスローダ"), "コメントは削除される");
+    }
+
+    @Test
+    void bareStatementsFragmentIsAnonymized(@TempDir Path tempDir) {
+        MappingStore store = new MappingStore(tempDir.resolve("mapping.json"));
+        JavaAnonymizer anonymizer = new JavaAnonymizer(store);
+
+        String fragment = """
+                int orderCount = 0;
+                orderCount = orderCount + 1;
+                """;
+
+        AnonymizeResult result = anonymizer.anonymize(fragment, new AnonymizeOptions(true, false));
+        String output = result.getOutput();
+
+        assertTrue(!output.contains("orderCount"), "文断片でも変数がリネームされる");
+        assertTrue(!output.contains("CodeAnonymizerFragmentWrapper"), "合成ラッパーが出力に漏れない");
+        assertTrue(!output.contains("codeAnonymizerFragmentMethod"), "合成メソッドが出力に漏れない");
+    }
+
     private static String extractClassNameToken(String output) {
         int idx = output.indexOf("public class ");
         String rest = output.substring(idx + "public class ".length());

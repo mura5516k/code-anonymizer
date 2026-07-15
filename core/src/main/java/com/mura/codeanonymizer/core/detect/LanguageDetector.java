@@ -12,7 +12,8 @@ public final class LanguageDetector {
             "^(SELECT|INSERT|UPDATE|DELETE|WITH)\\b", Pattern.CASE_INSENSITIVE);
 
     private static final Pattern JAVA_HINT = Pattern.compile(
-            "\\b(package|import|class|interface|enum)\\b");
+            "\\b(package|import|class|interface|enum|void|return|new|public|private|protected|static|final)\\b"
+            + "|@\\w+");
 
     private LanguageDetector() {
     }

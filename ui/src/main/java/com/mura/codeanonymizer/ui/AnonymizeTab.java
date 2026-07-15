@@ -76,6 +76,13 @@ public class AnonymizeTab extends JPanel {
             mainFrame.setStatus("入力が空です。");
             return;
         }
+        if (source.trim().startsWith("<")) {
+            mainFrame.setStatus("XML等の非対応形式のため処理を中止しました。");
+            JOptionPane.showMessageDialog(this,
+                    "入力がXML等の非対応形式のようです。\nこのツールはJavaソースコードとSQLのみ対応しています。",
+                    "非対応の形式", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
 
         String mode = (String) modeCombo.getSelectedItem();
         String effectiveMode = mode;
@@ -112,7 +119,7 @@ public class AnonymizeTab extends JPanel {
                 mainFrame.setStatus("匿名化が完了しました (" + effectiveMode + ")。警告: " + String.join(" / ", warnings));
             }
         } catch (RuntimeException ex) {
-            JOptionPane.showMessageDialog(this, ex.getMessage(), "匿名化エラー", JOptionPane.ERROR_MESSAGE);
+            ErrorDialogs.show(this, "匿名化エラー", ex);
             mainFrame.setStatus("エラーが発生しました。");
         }
     }

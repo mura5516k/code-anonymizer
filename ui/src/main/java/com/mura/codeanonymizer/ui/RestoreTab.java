@@ -58,7 +58,7 @@ public class RestoreTab extends JPanel {
             outputArea.setText(restored);
             mainFrame.setStatus("復元が完了しました。");
         } catch (RuntimeException ex) {
-            JOptionPane.showMessageDialog(this, ex.getMessage(), "復元エラー", JOptionPane.ERROR_MESSAGE);
+            ErrorDialogs.show(this, "復元エラー", ex);
             mainFrame.setStatus("エラーが発生しました。");
         }
     }

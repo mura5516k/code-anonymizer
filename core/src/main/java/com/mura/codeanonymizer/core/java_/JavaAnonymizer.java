@@ -1,5 +1,6 @@
 package com.mura.codeanonymizer.core.java_;
 
+import com.github.javaparser.ParseProblemException;
 import com.github.javaparser.ParserConfiguration;
 import com.github.javaparser.StaticJavaParser;
 import com.github.javaparser.ast.CompilationUnit;
@@ -48,16 +49,44 @@ public class JavaAnonymizer {
         this.store = store;
     }
 
+    /** コード断片をラップして解析した場合の種別。出力時にラッパーを剥がすために使う。 */
+    private enum FragmentKind { COMPILATION_UNIT, MEMBERS, STATEMENTS }
+
+    private static final String WRAPPER_CLASS = "CodeAnonymizerFragmentWrapper";
+    private static final String WRAPPER_METHOD = "codeAnonymizerFragmentMethod";
+
     public AnonymizeResult anonymize(String source, AnonymizeOptions options) {
         ParserConfiguration config = new ParserConfiguration()
                 .setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_17);
         StaticJavaParser.setConfiguration(config);
 
         CompilationUnit cu;
+        FragmentKind fragmentKind;
         try {
             cu = StaticJavaParser.parse(source);
+            fragmentKind = FragmentKind.COMPILATION_UNIT;
+        } catch (ParseProblemException originalError) {
+            // メソッド単体やフィールドだけの断片は、合成クラスでラップすると解析できる
+            try {
+                cu = StaticJavaParser.parse("class " + WRAPPER_CLASS + " {\n" + source + "\n}");
+                fragmentKind = FragmentKind.MEMBERS;
+            } catch (ParseProblemException ignored) {
+                // 文だけの断片は、さらに合成メソッドでラップして解析する
+                try {
+                    cu = StaticJavaParser.parse(
+                            "class " + WRAPPER_CLASS + " { void " + WRAPPER_METHOD + "() {\n" + source + "\n} }");
+                    fragmentKind = FragmentKind.STATEMENTS;
+                } catch (ParseProblemException ignored2) {
+                    // getMessage()は全問題のスタックトレースを含む巨大な文字列になるため、
+                    // 最初の失敗(元の入力そのまま)の先頭1行だけをユーザー向けメッセージに使う
+                    throw new JavaAnonymizeException(
+                            "Javaソースとして解析できませんでした: " + firstProblemLine(originalError)
+                            + "\n入力がJavaコードか、モード選択が正しいか確認してください(XML・プロパティファイル等は非対応です)。",
+                            originalError);
+                }
+            }
         } catch (RuntimeException e) {
-            throw new JavaAnonymizeException("Javaソースの解析に失敗しました: " + e.getMessage(), e);
+            throw new JavaAnonymizeException("Javaソースの解析に失敗しました: " + e.getClass().getSimpleName(), e);
         }
 
         List<String> warnings = new ArrayList<>();
@@ -88,7 +117,53 @@ public class JavaAnonymizer {
             removeComments(cu);
         }
 
-        return new AnonymizeResult(cu.toString(), warnings);
+        return new AnonymizeResult(render(cu, fragmentKind), warnings);
+    }
+
+    /** ラップして解析した場合は、合成したクラス/メソッドを剥がして断片部分だけを文字列化する。 */
+    private static String render(CompilationUnit cu, FragmentKind kind) {
+        if (kind == FragmentKind.COMPILATION_UNIT) {
+            return cu.toString();
+        }
+        ClassOrInterfaceDeclaration wrapper = cu.getClassByName(WRAPPER_CLASS)
+                .orElseThrow(() -> new IllegalStateException("ラッパークラスが見つかりません"));
+        if (kind == FragmentKind.MEMBERS) {
+            StringBuilder sb = new StringBuilder();
+            wrapper.getMembers().forEach(m -> {
+                if (sb.length() > 0) {
+                    sb.append("\n\n");
+                }
+                sb.append(m.toString());
+            });
+            return sb.toString();
+        }
+        MethodDeclaration method = wrapper.getMethodsByName(WRAPPER_METHOD).get(0);
+        StringBuilder sb = new StringBuilder();
+        method.getBody().ifPresent(body -> body.getStatements().forEach(st -> {
+            if (sb.length() > 0) {
+                sb.append("\n");
+            }
+            sb.append(st.toString());
+        }));
+        return sb.toString();
+    }
+
+    /** ParseProblemExceptionから先頭の問題の1行目だけを取り出し、最大200文字に丸める。 */
+    private static String firstProblemLine(ParseProblemException e) {
+        String message = e.getProblems().isEmpty()
+                ? String.valueOf(e.getMessage())
+                : e.getProblems().get(0).getMessage();
+        if (message == null) {
+            return "(詳細不明)";
+        }
+        int newline = message.indexOf('\n');
+        if (newline > 0) {
+            message = message.substring(0, newline);
+        }
+        if (message.length() > 200) {
+            message = message.substring(0, 200) + "…";
+        }
+        return message.trim();
     }
 
     private Map<String, NameKind> collectDeclarations(CompilationUnit cu) {
@@ -120,6 +195,10 @@ public class JavaAnonymizer {
 
     private void addIfEligible(Map<String, NameKind> declared, String name, NameKind kind) {
         if (JavaDenylist.contains(name)) {
+            return;
+        }
+        // 断片解析用にこちらで合成した名前はリネーム対象にしない
+        if (WRAPPER_CLASS.equals(name) || WRAPPER_METHOD.equals(name)) {
             return;
         }
         declared.putIfAbsent(name, kind);
