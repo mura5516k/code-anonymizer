@@ -256,6 +256,27 @@ class JavaAnonymizerTest {
         assertTrue(!output.contains("codeAnonymizerFragmentMethod"), "合成メソッドが出力に漏れない");
     }
 
+    @Test
+    void warnsAboutGetterCallsOnUnresolvedTypeVariables(@TempDir Path tempDir) {
+        MappingStore store = new MappingStore(tempDir.resolve("mapping.json"));
+        JavaAnonymizer anonymizer = new JavaAnonymizer(store);
+
+        String fragment = """
+                @Test
+                public void readTest() throws Exception {
+                    TestBean bean = readXml(fileName);
+                    assertEquals("test.xml", bean.getOriginName());
+                }
+                """;
+
+        AnonymizeResult result = anonymizer.anonymize(fragment, new AnonymizeOptions(true, false));
+
+        assertTrue(result.getOutput().contains("getOriginName"),
+                "未解決型のgetterは名前ベース解決では安全にリネームできないため残る(仕様上の既知の限界)");
+        assertTrue(result.getWarnings().stream().anyMatch(w -> w.contains("getOriginName")),
+                "getter呼び出しが匿名化されない旨の警告が出る: " + result.getWarnings());
+    }
+
     private static String extractClassNameToken(String output) {
         int idx = output.indexOf("public class ");
         String rest = output.substring(idx + "public class ".length());

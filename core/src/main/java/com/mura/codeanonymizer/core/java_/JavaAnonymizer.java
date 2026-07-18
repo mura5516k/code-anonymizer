@@ -19,7 +19,9 @@ import com.github.javaparser.ast.body.RecordDeclaration;
 import com.github.javaparser.ast.body.VariableDeclarator;
 import com.github.javaparser.ast.comments.Comment;
 import com.github.javaparser.ast.expr.MemberValuePair;
+import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.MethodReferenceExpr;
+import com.github.javaparser.ast.expr.NameExpr;
 import com.github.javaparser.ast.expr.NormalAnnotationExpr;
 import com.github.javaparser.ast.expr.SimpleName;
 import com.github.javaparser.ast.expr.SingleMemberAnnotationExpr;
@@ -34,6 +36,7 @@ import com.mura.codeanonymizer.core.mapping.MappingStore;
 import com.mura.codeanonymizer.core.mapping.NameKind;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -261,6 +264,48 @@ public class JavaAnonymizer {
         if (!unresolved.isEmpty()) {
             warnings.add("宣言もimportもされていない型を検出しました(同一パッケージの社内クラスの可能性があり、"
                     + "匿名化されません): " + String.join(", ", unresolved));
+        }
+
+        detectUnresolvedMethodCallWarnings(cu, unresolved, warnings);
+    }
+
+    /**
+     * 未解決の型(同一パッケージの社内クラスの可能性がある型)の変数に対するメソッド呼び出しを検出する。
+     * 例: TestBean bean = ...; bean.getOriginName() の getOriginName() のような、
+     * getter/setter名に業務用語が含まれるケースがそのまま漏れるため、リネームできない旨を警告する。
+     */
+    private void detectUnresolvedMethodCallWarnings(CompilationUnit cu, Set<String> unresolvedTypes,
+                                                     List<String> warnings) {
+        if (unresolvedTypes.isEmpty()) {
+            return;
+        }
+
+        Map<String, String> varToType = new HashMap<>();
+        cu.findAll(VariableDeclarator.class).forEach(v -> {
+            if (v.getType() instanceof ClassOrInterfaceType type) {
+                varToType.put(v.getNameAsString(), type.getNameAsString());
+            }
+        });
+        cu.findAll(Parameter.class).forEach(p -> {
+            if (p.getType() instanceof ClassOrInterfaceType type) {
+                varToType.put(p.getNameAsString(), type.getNameAsString());
+            }
+        });
+
+        Set<String> calls = new TreeSet<>();
+        cu.findAll(MethodCallExpr.class).forEach(call -> {
+            call.getScope().filter(s -> s instanceof NameExpr).ifPresent(scope -> {
+                String varName = ((NameExpr) scope).getNameAsString();
+                String typeName = varToType.get(varName);
+                if (typeName != null && unresolvedTypes.contains(typeName)) {
+                    calls.add(varName + "." + call.getNameAsString() + "(...)");
+                }
+            });
+        });
+
+        if (!calls.isEmpty()) {
+            warnings.add("未解決の型に対するメソッド呼び出しを検出しました(getter/setter名等が匿名化されずに残ります): "
+                    + String.join(", ", calls));
         }
     }
 
